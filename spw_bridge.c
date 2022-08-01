@@ -62,7 +62,6 @@
 
 
 #define DEFAULT_LINK_DIV 20
-#define DEFAULT_LINK_MUL 2
 
 #define STAR_DEVICE_TYPE_BRICK_MKII	 9
 #define STAR_DEVICE_TYPE_PCIE		11
@@ -558,7 +557,7 @@ static void *poll_socket(__attribute__((unused)) void *arg)
 
 			if (!FD_ISSET(sockfd, &readset))
 				continue;
-		
+
 			net_to_spw(sockfd);
 		}
 	}
@@ -576,8 +575,7 @@ static void rmap_read_cmd(unsigned char dst, uint32_t addr, uint32_t size)
 	unsigned char src = 0x30;
 	char key = 0xab;
 
-	pkt = RMAP_BuildReadCommandPacket(&dst, 1, &src, 1, 1, key, 0, addr, 0,
-		       			  5, &len, NULL, 1);
+	pkt = RMAP_BuildReadCommandPacket(&dst, 1, &src, 1, 1, key, 0, addr, 0, 5, &len, NULL, 1);
 	if (!pkt) {
 		printf("Failure in  RMAP_BuildReadCommandPacket()\n");
 		return;
@@ -1027,7 +1025,6 @@ int main(int argc, char **argv)
 	unsigned int dev_type;
 	unsigned int link_id;
 	unsigned int link_div;
-	unsigned int link_mul;
 
 	struct addrinfo *res;
 
@@ -1050,7 +1047,6 @@ int main(int argc, char **argv)
 	skip_header_bytes = 0;
 	pkt_throttle_usec = 0;
 	link_div = DEFAULT_LINK_DIV;
-	link_mul = DEFAULT_LINK_MUL;
 
 
 	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:PR::h")) != -1) {
@@ -1271,14 +1267,16 @@ int main(int argc, char **argv)
 			break;
 
 		case STAR_DEVICE_TYPE_BRICK_MKIV:
+#if 1
 			/* always set base transmit clock speed to 100 (== 200 link speed) */
-			/* note in the Mk4, the max speed is 300 MBit/s) */
-			STAR_CFG_MK2_BASE_TRANSMIT_CLOCK tx_clk = {.divisor = 2, .multiplier = 1};
+			/* note in the Mk4, the max speed is 400 MBit/s) */
+			STAR_CFG_MK2_BASE_TRANSMIT_CLOCK tx_clk = {.divisor = 2, .multiplier = 2};
 			if (!CFG_BRICK_MK3_setTransmitClock(dev_id, link_id, tx_clk)) {
 				printf("Failed to set link clock frequency for link %d.\n", link_id);
 				exit(EXIT_FAILURE);
 			}
 
+#endif
 			if (!CFG_MK2_setLinkRateDivider(dev_id, link_id, link_div)) {
 				printf("Failed to set link divider for link %d.\n", link_id);
 				exit(EXIT_FAILURE);
@@ -1288,7 +1286,7 @@ int main(int argc, char **argv)
 
 			CFG_MK2_getMeasuredLinkSpeed(dev_id, link_id, &link_speed);
 
-			printf("Brick Mk3 port %d link speed measured:   %g Mbits/s\n", link_id, link_speed * STAR_CFG_BRICK_MK2_LINK_SPEED_UNITS_KBPS / 1024.);
+			printf("Brick Mk3 port %d link speed measured:   %g Mbits/s\n", link_id, link_speed * STAR_CFG_MK2_LINK_SPEED_UNITS_KBPS / 1024.);
 
 			break;
 
