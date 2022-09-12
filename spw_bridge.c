@@ -1030,6 +1030,9 @@ int main(int argc, char **argv)
 
 	struct sigaction SIGINT_handler;
 
+	PORT_STATUS_CONTROL port_status;
+	STAR_CFG_SPW_LINK_STATUS link_status;
+
 	enum {SERVER, CLIENT} mode;
 
 
@@ -1341,6 +1344,12 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
+	/* make sure the link is running */
+        CFG_getPortStatusControl(dev_id, channel, &port_status);
+	CFG_getSpaceWireLinkStatus(port_status, &link_status);
+	link_status.start = 1;
+	link_status.running = 1;
+	CFG_setSpaceWireLinkStatus(dev_id, channel, &link_status);
 
 
 	/**
