@@ -44,12 +44,14 @@
 #include <pthread.h>
 
 
-#include <star-api.h>
-#include <cfg_api_mk2.h>
-#include <cfg_api_brick_mk2.h>
-#include <cfg_api_brick_mk3.h>
-#include <cfg_api_pci_mk2.h>
-#include <rmap_packet_library.h>
+#include <star/star-api.h>
+#include <star/cfg_api_mk2.h>
+#include <star/cfg_api_brick_mk2.h>
+#include <star/cfg_api_brick_mk3.h>
+#include <star/cfg_api_pci_mk2.h>
+#include <star/cfg_api_pci_mk2.h>
+#include <star/cfg_api_generic.h>
+#include <star/rmap_packet_library.h>
 
 
 
