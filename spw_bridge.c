@@ -35,7 +35,7 @@
 #include <arpa/inet.h>
 
 #include <rmap.h>
-
+#include <gresb.h>
 
 
 #include <signal.h>
@@ -84,6 +84,7 @@ int pkt_throttle_usec;
 int interpret_pus;
 
 int enable_rmap;
+int enable_gresb;
 
 /* yay (and technically incorrect) */
 volatile fd_set conn_set;
@@ -397,7 +398,9 @@ static void net_to_spw(int sockfd)
 
 	unsigned short packet_length;
 	struct timespec now;
-	
+
+
+
 	STAR_STREAM_ITEM 	*p_tx_stream_item = NULL;
 	STAR_TRANSFER_OPERATION *p_tx_transfer_op = NULL;
 
@@ -443,6 +446,45 @@ static void net_to_spw(int sockfd)
 
 			expseq = (sctr + 1) & 0x3fff;
 		}
+	} else if (enable_gresb) {
+
+		ssize_t recv_left;
+		ssize_t pkt_size;
+		uint8_t gresb_hdr[4];	/* host-to-gresb header is 4 bytes */
+		unsigned char *pkt_buf = NULL;
+
+		/* try to grab a header */
+		recv_bytes = recv(sockfd, gresb_hdr, 4, MSG_PEEK | MSG_DONTWAIT);
+		if (recv_bytes < 4)
+			goto cleanup;
+
+		/* we got at least a header, now allocate space for a host-to-gresb
+		 * packet (data + header) and start receiving
+		 * note the lack of basic sanity checks...
+		 */
+		pkt_size = gresb_get_spw_data_size(gresb_hdr) + 4;
+		pkt_buf = malloc(pkt_size);
+
+
+		/* pull in the whole packet */
+		recv_bytes = 0;
+		recv_left  = pkt_size ;
+		while (recv_left) {
+			ssize_t rb;
+			rb = recv(sockfd, pkt_buf + recv_bytes, recv_left, 0);
+			recv_bytes += rb;
+			recv_left  -= rb;
+		}
+
+		packet_length = gresb_get_spw_data_size(gresb_hdr);
+		recv_buffer  =  malloc(packet_length);
+
+		/* update */
+		recv_bytes = packet_length;
+
+		memcpy(recv_buffer, gresb_get_spw_data(pkt_buf), packet_length);
+
+		free(pkt_buf);
 
 	} else {
 
@@ -567,7 +609,7 @@ static void *poll_socket(__attribute__((unused)) void *arg)
 	return NULL;
 }
 
-static void rmap_read_cmd(unsigned char dst, uint32_t addr, uint32_t size)
+static void rmap_read_cmd(unsigned char dst, uint32_t addr)
 {
 	unsigned long len;
 
@@ -678,7 +720,7 @@ static void rmap_net_to_spw(int sockfd)
 
 
 	if (!op)
-		rmap_read_cmd(dst, addr, size);
+		rmap_read_cmd(dst, addr);
 	else
 		rmap_write_cmd(dst, addr, &rec[10], size);
 
@@ -819,7 +861,7 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 
 	unsigned int  spw_recv_bytes;
 	unsigned char *spw_recv_buffer = NULL;
-		  
+	uint8_t *gresb_pkt = NULL;
 	unsigned short sctr;
 	static unsigned short expseq = 1;
 
@@ -869,6 +911,12 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 			printf("%02x", spw_recv_buffer[i]);
 		printf("\n\n");
 
+		if (spw_recv_bytes <= skip_header_bytes) {
+			printf("skip_header_bytes is %u, dropping packet\n", skip_header_bytes);
+			continue;
+		}
+
+
 		if (enable_rmap) {
 			if (spw_recv_buffer[skip_header_bytes + 1] == 0x1) {
 				rmap_net_send(spw_recv_buffer);
@@ -886,22 +934,35 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 			expseq = (sctr + 1) & 0x3fff;
 		}
 
+		if (enable_gresb)
+			gresb_pkt = gresb_create_host_data_pkt(spw_recv_buffer + skip_header_bytes,
+							       spw_recv_bytes - skip_header_bytes);
+
 
 
 
 		for (fd = 0; fd < nfds; fd++) {
-                        if (!FD_ISSET(fd, &conn_set))
+			if (!FD_ISSET(fd, &conn_set))
 				continue;
 
-			if (spw_recv_bytes <= skip_header_bytes)
-				break;
+			if (!enable_gresb) {
+				if (send_all(fd, spw_recv_buffer + skip_header_bytes,
+					     spw_recv_bytes  - skip_header_bytes) == -1) {
+					perror("send");
+					FD_CLR(fd, &conn_set);
+				}
 
-			if (send_all(fd, spw_recv_buffer + skip_header_bytes, 
-					 spw_recv_bytes  - skip_header_bytes) == -1) {
-				perror("send");
-				FD_CLR(fd, &conn_set);
+			} else {
+				if (send_all(fd, gresb_pkt, gresb_get_host_data_pkt_size(gresb_pkt)) == -1) {
+					perror("send");
+					FD_CLR(fd, &conn_set);
+
+				}
 			}
 		}
+
+		if (enable_gresb)
+			gresb_destroy_host_data_pkt((struct host_to_gresb_pkt *) gresb_pkt);
 	}
 
 	/* never reached...*/
@@ -1054,7 +1115,7 @@ int main(int argc, char **argv)
 	link_div = DEFAULT_LINK_DIV;
 
 
-	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:PR::h")) != -1) {
+	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:PRG::h")) != -1) {
 		switch (opt) {
 		case 'c':
 			channel= strtol(optarg, NULL, 0);
@@ -1129,6 +1190,9 @@ int main(int argc, char **argv)
 		case 'P':
 			interpret_pus = 1;
 			break;
+		case 'G':
+			enable_gresb = 1;
+			break;
 		case 'R':
 
 			if (argv[optind])
@@ -1151,6 +1215,7 @@ int main(int argc, char **argv)
 			printf("  -L LINKID                 id of link to set speed/divider for; needed with Brick Mk2 port 2; (default link_id = channel). \n");
 			printf("  -P                        parse network byte stream for PUS packets\n");
 			printf("  -R RMAP_PORT              exchange RMAP via RMAP_PORT\n");
+			printf("  -G                        use GRESB protocol for network exchange\n");
 			printf("  -h, --help                print this help and exit\n");
 			printf("\n");
 			exit(0);
