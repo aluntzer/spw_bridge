@@ -18,7 +18,7 @@
  *
  * BUGS:
  *  - this is still a hacked together mess (and there's lots of duplicate code)
- *  - SpW packets are be at most 1028 bytes (magic numbers below)
+ *  - SpW packets are be at most MTU_SIZE bytes (magic numbers below)
  *  - does not detect remote disconnect in client mode
  *  - race conditions may be present when accessing data between threads
  *  - maybe lots of others
@@ -49,10 +49,9 @@
 #include <star/cfg_api_brick_mk2.h>
 #include <star/cfg_api_brick_mk3.h>
 #include <star/cfg_api_pci_mk2.h>
-#include <star/cfg_api_pci_mk2.h>
+#include <star/cfg_api_pcie_mk2.h>
 #include <star/cfg_api_generic.h>
 #include <star/rmap_packet_library.h>
-
 
 
 
@@ -68,6 +67,10 @@
 #define STAR_DEVICE_TYPE_BRICK_MKII	 9
 #define STAR_DEVICE_TYPE_PCIE		11
 #define STAR_DEVICE_TYPE_BRICK_MKIV	36
+#define STAR_DEVICE_TYPE_PCIE_MKII      38
+
+#define FIXME_200 200
+#define MTU_SIZE 4096 /* was: 1028 */
 
 /* global fun! */
 int server_socket, server_socket_connection;
@@ -488,8 +491,8 @@ static void net_to_spw(int sockfd)
 
 	} else {
 
-		recv_buffer = (uint8_t *) malloc(1028);
-		recv_bytes  = recv(sockfd, recv_buffer, 1028, 0);
+		recv_buffer = (uint8_t *) malloc(MTU_SIZE);
+		recv_bytes  = recv(sockfd, recv_buffer, MTU_SIZE, 0);
 		packet_length = recv_bytes;
 
 		if (recv_bytes <= 0) {
@@ -500,22 +503,24 @@ static void net_to_spw(int sockfd)
 	}
 
 	clock_gettime (CLOCK_MONOTONIC, &now);
-
+	(void) i;
+#if 0
 	printf("[%ld.%09ld] Server %d got %ld bytes\b", now.tv_sec, now.tv_nsec,
 						        sockfd, recv_bytes);
-
+#endif
 	/* disconnect while receiving ? */
 	if (((ssize_t) packet_length) != recv_bytes)
 		goto cleanup;
 
 
 	/* send packet via SpW*/
+#if 0
 	printf("creating stream item of %d bytes\n", packet_length);
 	printf("NET->PC: ");
 	for (i = 0; i < packet_length; i++)
 		printf("%02x", recv_buffer[i]);
 	printf("\n\n");
-
+#endif
 
 	p_tx_stream_item = STAR_createPacket(p_address, recv_buffer,
 					     packet_length, STAR_EOP_TYPE_EOP);
@@ -1088,6 +1093,7 @@ int main(int argc, char **argv)
 	unsigned int dev_type;
 	unsigned int link_id;
 	unsigned int link_div;
+	U32 link_speed_U32;
 
 	struct addrinfo *res;
 
@@ -1312,7 +1318,7 @@ int main(int argc, char **argv)
 
 	dev_id = select_device(0);
 
-	channel= select_channel(dev_id, channel);
+	channel = select_channel(dev_id, channel);
 
 	dev_type = STAR_getDeviceType(dev_id);
 
@@ -1361,12 +1367,12 @@ int main(int argc, char **argv)
 			break;
 
 		case STAR_DEVICE_TYPE_PCIE:
-			/* always set link speed to 200 */
-			if (!CFG_PCIMK2_setLinkClockFrequency(dev_id, link_id, STAR_CFG_PCIMK2_LINK_FREQ_200)) {
+#if 0			/* always set link speed to 200 */
+			if (!CFG_PCIE_setLinkClockFrequency(dev_id, link_id, STAR_CFG_PCIMK2_LINK_FREQ_200)) {
 				printf("Failed to set link clock frequency for link %d.\n", link_id);
 				exit(EXIT_FAILURE);
 			}
-			if (!CFG_MK2_setLinkRateDivider(dev_id, link_id, link_div)) {
+			if (!CFG_PCIE_setLinkRateDivider(dev_id, link_id, link_div)) {
 				printf("Failed to set link divider for link %d.\n", link_id);
 				exit(EXIT_FAILURE);
 			}
@@ -1374,7 +1380,24 @@ int main(int argc, char **argv)
 			printf("PCIe port %d link speed configured: %d Mbits/s\n", link_id, 200/link_div);
 
 			break;
+#endif
+		case STAR_DEVICE_TYPE_PCIE_MKII:
+		  
+		  /* configure a link speed of 200 */
+		  if (!CFG_PCIE_MK2_setTransmitSignallingRate(dev_id, link_id, FIXME_200)) {
+				printf("Failed to set link clock frequency for link %d.\n", link_id);
+				exit(EXIT_FAILURE);
+		  }
 
+		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, FIXME_200);
+		  
+		  CFG_PCIE_MK2_getTransmitSignallingRate(dev_id, link_id, &link_speed_U32);
+		  
+		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, link_speed_U32);
+
+		  break;
+
+			
 		default:
 			printf("Unknown device with ID %d, don't know how to configure link speed.\n", dev_type);
 			exit(EXIT_FAILURE);
