@@ -63,13 +63,13 @@
 
 
 #define DEFAULT_LINK_DIV 20
+#define DEFAULT_LINK_SPEED 200
 
 #define STAR_DEVICE_TYPE_BRICK_MKII	 9
 #define STAR_DEVICE_TYPE_PCIE		11
 #define STAR_DEVICE_TYPE_BRICK_MKIV	36
 #define STAR_DEVICE_TYPE_PCIE_MKII      38
 
-#define FIXME_200 200
 #define MTU_SIZE 4096 /* was: 1028 */
 
 /* global fun! */
@@ -1119,9 +1119,9 @@ int main(int argc, char **argv)
 	skip_header_bytes = 0;
 	pkt_throttle_usec = 0;
 	link_div = DEFAULT_LINK_DIV;
+	link_speed = DEFAULT_LINK_SPEED;
 
-
-	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:PRG::h")) != -1) {
+	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:S:PRG::h")) != -1) {
 		switch (opt) {
 		case 'c':
 			channel= strtol(optarg, NULL, 0);
@@ -1190,6 +1190,9 @@ int main(int argc, char **argv)
 		case 'D':
 			link_div = strtol(optarg, NULL, 0);
 			break;
+		case 'S':
+		        link_speed = (unsigned short) strtoul(optarg, NULL, 0);
+			break;
 		case 'L':
 			link_id = strtol(optarg, NULL, 0);
 			break;
@@ -1218,6 +1221,7 @@ int main(int argc, char **argv)
 			printf("  -d NUM                    number of header bytes to drop from incoming SpW packet (default %d)\n", skip_header_bytes);
 			printf("  -t timeout (µs)           throttle transmission of SpW packets by inserting a delay between packets (default %d)\n", pkt_throttle_usec);
 			printf("  -D LINKDIV                link rate divider (default %d)\n", link_div);
+			printf("  -S LINKSPEED              link speed in MHz (default %d)\n", link_speed);
 			printf("  -L LINKID                 id of link to set speed/divider for; needed with Brick Mk2 port 2; (default link_id = channel). \n");
 			printf("  -P                        parse network byte stream for PUS packets\n");
 			printf("  -R RMAP_PORT              exchange RMAP via RMAP_PORT\n");
@@ -1384,12 +1388,12 @@ int main(int argc, char **argv)
 		case STAR_DEVICE_TYPE_PCIE_MKII:
 		  
 		  /* configure a link speed of 200 */
-		  if (!CFG_PCIE_MK2_setTransmitSignallingRate(dev_id, link_id, FIXME_200)) {
+		  if (!CFG_PCIE_MK2_setTransmitSignallingRate(dev_id, link_id, link_speed)) {
 				printf("Failed to set link clock frequency for link %d.\n", link_id);
 				exit(EXIT_FAILURE);
 		  }
 
-		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, FIXME_200);
+		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, link_speed);
 		  
 		  CFG_PCIE_MK2_getTransmitSignallingRate(dev_id, link_id, &link_speed_U32);
 		  
