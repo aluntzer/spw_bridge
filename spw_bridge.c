@@ -224,7 +224,7 @@ static int bind_server_socket(const char* url)
 
 	sockfd = socket(AF_INET , SOCK_STREAM , 0);
 
-	FD_ZERO(&conn_set);
+	FD_ZERO((fd_set *)&conn_set);
 
 	if (sockfd < 0) {
 		printf("Socket creation failed: %s\n", strerror(errno));
@@ -273,7 +273,7 @@ static int rmap_bind_server_socket(const char* url)
 
 	sockfd = socket(AF_INET , SOCK_STREAM , 0);
 
-	FD_ZERO(&rmap_conn_set);
+	FD_ZERO((fd_set *)&rmap_conn_set);
 
 	if (sockfd < 0) {
 		printf("Socket creation failed: %s\n", strerror(errno));
@@ -500,22 +500,25 @@ static void net_to_spw(int sockfd)
 	}
 
 	clock_gettime (CLOCK_MONOTONIC, &now);
-
+#if 0
 	printf("[%ld.%09ld] Server %d got %ld bytes\b", now.tv_sec, now.tv_nsec,
 						        sockfd, recv_bytes);
-
+#endif
 	/* disconnect while receiving ? */
 	if (((ssize_t) packet_length) != recv_bytes)
 		goto cleanup;
 
 
 	/* send packet via SpW*/
+#if 0
 	printf("creating stream item of %d bytes\n", packet_length);
+#endif
 	printf("NET->PC: ");
 	for (i = 0; i < packet_length; i++)
 		printf("%02x", recv_buffer[i]);
-	printf("\n\n");
+	printf("\n");
 
+	rmap_parse_pkt(recv_buffer);
 
 	p_tx_stream_item = STAR_createPacket(p_address, recv_buffer,
 					     packet_length, STAR_EOP_TYPE_EOP);
@@ -782,7 +785,7 @@ static void *poll_rmap_socket(__attribute__((unused)) void *arg)
  *  lacks size checks!
  */
 
-static void rmap_net_send(unsigned char *buf)
+static void rmap_net_send(unsigned char *buf, unsigned int len)
 {
 	int fd;
 	unsigned int i;
@@ -793,7 +796,7 @@ static void rmap_net_send(unsigned char *buf)
 	unsigned int n;
 
 
-	pkt = rmap_pkt_from_buffer(&buf[skip_header_bytes]);
+	pkt = rmap_pkt_from_buffer(&buf[skip_header_bytes], len - skip_header_bytes);
 	if (!pkt)
 		return;
 
@@ -902,14 +905,16 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 		p_spw_packet = (STAR_SPACEWIRE_PACKET *) STAR_getTransferItem(p_rx_transfer_op, 0)->item;
 
 		spw_recv_buffer = STAR_getPacketData(p_spw_packet, &spw_recv_bytes);
-
+#if 0
 		/* skip header/address byte(s) */
 		printf("SpW link received %d bytes\n", spw_recv_bytes);
-
+#endif
 		printf("SPW->PC: ");
 		for (i = 0; i < spw_recv_bytes; i++)
 			printf("%02x", spw_recv_buffer[i]);
-		printf("\n\n");
+		printf("\n");
+
+		rmap_parse_pkt(spw_recv_buffer);
 
 		if (spw_recv_bytes <= skip_header_bytes) {
 			printf("skip_header_bytes is %u, dropping packet\n", skip_header_bytes);
@@ -919,7 +924,7 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 
 		if (enable_rmap) {
 			if (spw_recv_buffer[skip_header_bytes + 1] == 0x1) {
-				rmap_net_send(spw_recv_buffer);
+				rmap_net_send(spw_recv_buffer, spw_recv_bytes);
 				continue;
 			}
 		}

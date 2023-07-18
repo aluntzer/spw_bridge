@@ -1,6 +1,25 @@
+/**
+ * @file   rmap.h
+ * @author Armin Luntzer (armin.luntzer@univie.ac.at),
+ * @date   2018
+ *
+ * @copyright GPLv2
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * @brief rmap command/reply helper functions
+ */
+
 #ifndef RMAP_H
 #define RMAP_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /**
@@ -84,12 +103,14 @@
 #define RMAP_ADDR_BYTE2		0x0a
 #define RMAP_ADDR_BYTE3		0x0b
 
+#define RMAP_ADDR_EXTRA_OFFSET	   4 
 /* RMAP header bytes in relative offsets (add extra 4 if address present)  */
 #define RMAP_DATALEN_BYTE0	0x08
 #define RMAP_DATALEN_BYTE1	0x09
 #define RMAP_DATALEN_BYTE2	0x0a
 #define RMAP_HEADER_CRC		0x0b
 #define RMAP_DATA_START		0x0c
+
 
 /**
  * While the size of a SpW packet is in principl not limited, the size of the
@@ -109,14 +130,14 @@
  * @see GR712RC-UM v2.7 p112 and ECSS‐E‐ST‐50‐52C e.g. 5.3.1.1
  */
 
-#define RMAP_MAX_PATH_LEN		228
+#define RMAP_MAX_PATH_LEN		 15
 #define RMAP_MAX_REPLY_ADDR_LEN		  3
 #define RMAP_MAX_REPLY_PATH_LEN		 12
 #define RMAP_MAX_DATA_LEN	   0xFFFFFFUL
 
 
 
-
+__extension__
 struct rmap_instruction {
 #if (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
 	uint8_t	reserved:1;
@@ -165,21 +186,38 @@ struct rmap_pkt {
 	uint32_t	addr;		/* (first) data address */
 	uint8_t		*data;
 	uint32_t	data_len;	/* lenght of data in bytes */
+	uint8_t		hdr_crc;
+	uint8_t		data_crc;
 };
 
 
 
+uint8_t rmap_crc8(const uint8_t *buf, const size_t len);
+
 struct rmap_pkt *rmap_create_packet(void);
-struct rmap_pkt *rmap_pkt_from_buffer(uint8_t *buf);
+struct rmap_pkt *rmap_pkt_from_buffer(uint8_t *buf, uint32_t len);
 int rmap_build_hdr(struct rmap_pkt *pkt, uint8_t *hdr);
 int rmap_set_data_len(struct rmap_pkt *pkt, uint32_t len);
 void rmap_set_data_addr(struct rmap_pkt *pkt, uint32_t addr);
 int rmap_set_cmd(struct rmap_pkt *pkt, uint8_t cmd);
 
+
+void rmap_set_dst(struct rmap_pkt *pkt, uint8_t addr);
+void rmap_set_src(struct rmap_pkt *pkt, uint8_t addr);
+void rmap_set_key(struct rmap_pkt *pkt, uint8_t key);
+void rmap_set_tr_id(struct rmap_pkt *pkt, uint16_t id);
+
+int rmap_set_reply_path(struct rmap_pkt *pkt, const uint8_t *rpath, uint8_t len);
+int rmap_set_dest_path(struct rmap_pkt *pkt, const uint8_t *path, uint8_t len);
+
+
 void rmap_erase_packet(struct rmap_pkt *pkt);
 
 
 void rmap_parse_pkt(uint8_t *pkt);
+
+size_t rmap_get_non_rmap_pckt_cnt_err(void);
+void rmap_clear_non_rmap_pckt_cnt_err(void);
 
 
 #endif /* RMAP_H */
