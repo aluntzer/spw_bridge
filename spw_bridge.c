@@ -1093,6 +1093,7 @@ int main(int argc, char **argv)
 	unsigned int dev_type;
 	unsigned int link_id;
 	unsigned int link_div;
+	unsigned int dev_num = 0;
 
 	struct addrinfo *res;
 
@@ -1120,8 +1121,11 @@ int main(int argc, char **argv)
 	link_div = DEFAULT_LINK_DIV;
 
 
-	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:PRG::h")) != -1) {
+	while ((opt = getopt(argc, argv, "i:c:n:p:s:r:d:t:D:L:PRG::h")) != -1) {
 		switch (opt) {
+		case 'i':
+			dev_num = strtol(optarg, NULL, 0);
+			break;
 		case 'c':
 			channel= strtol(optarg, NULL, 0);
 			link_id = channel;
@@ -1209,6 +1213,7 @@ int main(int argc, char **argv)
 		case 'h':
 		default:
 			printf("\nUsage: %s [OPTIONS]\n", argv[0]);
+			printf("  -i DEVNUM                 SpW device id to use (default %d)\n", dev_num);
 			printf("  -c CHANNEL                SpW channel to use (default %d)\n", channel);
 			printf("  -n 01:1a:cc:..            SpW address nodes route/path in hex bytes (1 byte per node)\n");
 			printf("  -p PORT                   local port number (default %d)\n", port);
@@ -1315,7 +1320,7 @@ int main(int argc, char **argv)
 	 * set up SpW device
 	 */
 
-	dev_id = select_device(0);
+	dev_id = select_device(dev_num);
 
 	channel= select_channel(dev_id, channel);
 
