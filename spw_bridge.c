@@ -18,7 +18,7 @@
  *
  * BUGS:
  *  - this is still a hacked together mess (and there's lots of duplicate code)
- *  - SpW packets are be at most 1028 bytes (magic numbers below)
+ *  - SpW packets are be at most MTU bytes (define below)
  *  - does not detect remote disconnect in client mode
  *  - race conditions may be present when accessing data between threads
  *  - maybe lots of others
@@ -43,6 +43,8 @@
 #include <netdb.h>
 #include <pthread.h>
 
+#include <byteorder.h>
+
 
 #include <star/star-api.h>
 #include <star/cfg_api_mk2.h>
@@ -62,6 +64,7 @@
 #define DEFAULT_ADDR "0.0.0.0"
 #define DEFAULT_CHAN 1
 
+#define MTU		16384
 
 #define DEFAULT_LINK_DIV 20
 
@@ -81,10 +84,26 @@ STAR_TRANSFER_STATUS tx_status;
 
 unsigned int skip_header_bytes;
 int pkt_throttle_usec;
-int interpret_pus;
 
 int enable_rmap;
 int enable_gresb;
+
+int interpret_pus;
+int interpret_fee;
+
+#define FEE_DATA_PROTOCOL	0xF0
+
+__extension__
+struct fee_data_hdr {
+	uint8_t logical_addr;
+	uint8_t proto_id;
+	uint16_t data_len;
+	uint16_t fee_pkt_type;
+	uint16_t frame_cntr;	/* increments per-frame, see Draft A.14 MSSL-IF-109 */
+	uint16_t seq_cntr;	/* packet seq. in frame transfer, see Draft A.14 MSSL-IF-110 */
+} __attribute__((packed));
+
+
 
 /* yay (and technically incorrect) */
 volatile fd_set conn_set;
@@ -399,6 +418,8 @@ static void net_to_spw(int sockfd)
 	unsigned short packet_length;
 	struct timespec now;
 
+	struct fee_data_hdr fee_hdr;
+
 
 
 	STAR_STREAM_ITEM 	*p_tx_stream_item = NULL;
@@ -438,14 +459,48 @@ static void net_to_spw(int sockfd)
 			goto cleanup;
 		}
 
-		if (interpret_pus) {
-			sctr = (((uint16_t)recv_buffer[2] << 8) | recv_buffer[3]) & 0x3fff;
+		sctr = (((uint16_t)recv_buffer[2] << 8) | recv_buffer[3]) & 0x3fff;
+		if (sctr != expseq)
+			fprintf(stderr, "Sequence expected: %d is: %d\n", expseq, sctr);
 
-			if (sctr != expseq)
-				fprintf(stderr, "Sequence expected: %d is: %d\n", expseq, sctr);
+		expseq = (sctr + 1) & 0x3fff;
 
-			expseq = (sctr + 1) & 0x3fff;
+	} else if (interpret_fee) {
+		recv_bytes = recv(sockfd, &fee_hdr, sizeof(struct fee_data_hdr), MSG_PEEK);
+
+		if (recv_bytes <= 0) {
+			FD_CLR(sockfd, &conn_set);
+			perror("poll_client_socket");
+			goto cleanup;
 		}
+
+		if (fee_hdr.proto_id == FEE_DATA_PROTOCOL) {
+
+			packet_length = __be16_to_cpu(fee_hdr.data_len) + sizeof(struct fee_data_hdr);
+
+			recv_buffer = (uint8_t *) malloc(packet_length);
+
+			recv_bytes  = recv(sockfd, recv_buffer, packet_length, 0);
+
+			if (recv_bytes <= 0) {
+				FD_CLR(sockfd, &conn_set);
+				perror("poll_client_socket");
+				goto cleanup;
+			}
+		}
+
+
+		/* otherwise treat as rmap */
+		recv_buffer = (uint8_t *) malloc(MTU);
+		recv_bytes  = recv(sockfd, recv_buffer, MTU, 0);
+		packet_length = recv_bytes;
+
+		if (recv_bytes <= 0) {
+			FD_CLR(sockfd, &conn_set);
+			perror("poll_client_socket");
+			goto cleanup;
+		}
+
 	} else if (enable_gresb) {
 
 		ssize_t recv_left;
@@ -488,8 +543,8 @@ static void net_to_spw(int sockfd)
 
 	} else {
 
-		recv_buffer = (uint8_t *) malloc(1028);
-		recv_bytes  = recv(sockfd, recv_buffer, 1028, 0);
+		recv_buffer = (uint8_t *) malloc(MTU);
+		recv_bytes  = recv(sockfd, recv_buffer, MTU, 0);
 		packet_length = recv_bytes;
 
 		if (recv_bytes <= 0) {
@@ -1121,7 +1176,7 @@ int main(int argc, char **argv)
 	link_div = DEFAULT_LINK_DIV;
 
 
-	while ((opt = getopt(argc, argv, "i:c:n:p:s:r:d:t:D:L:PRG::h")) != -1) {
+	while ((opt = getopt(argc, argv, "i:c:n:p:s:r:d:t:D:L:PFRG::h")) != -1) {
 		switch (opt) {
 		case 'i':
 			dev_num = strtol(optarg, NULL, 0);
@@ -1199,6 +1254,9 @@ int main(int argc, char **argv)
 		case 'P':
 			interpret_pus = 1;
 			break;
+		case 'F':
+			interpret_fee = 1;
+			break;
 		case 'G':
 			enable_gresb = 1;
 			break;
@@ -1224,6 +1282,7 @@ int main(int argc, char **argv)
 			printf("  -D LINKDIV                link rate divider (default %d)\n", link_div);
 			printf("  -L LINKID                 id of link to set speed/divider for; needed with Brick Mk2 port 2; (default link_id = channel). \n");
 			printf("  -P                        parse network byte stream for PUS packets\n");
+			printf("  -F                        parse network byte stream for FEE data packets\n");
 			printf("  -R RMAP_PORT              exchange RMAP via RMAP_PORT\n");
 			printf("  -G                        use GRESB protocol for network exchange\n");
 			printf("  -h, --help                print this help and exit\n");
