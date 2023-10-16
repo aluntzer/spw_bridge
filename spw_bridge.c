@@ -18,7 +18,7 @@
  *
  * BUGS:
  *  - this is still a hacked together mess (and there's lots of duplicate code)
- *  - SpW packets are be at most MTU_SIZE bytes (magic numbers below)
+ *  - SpW packets are be at most MTU bytes (define below)
  *  - does not detect remote disconnect in client mode
  *  - race conditions may be present when accessing data between threads
  *  - maybe lots of others
@@ -43,11 +43,14 @@
 #include <netdb.h>
 #include <pthread.h>
 
+#include <byteorder.h>
+
 
 #include <star/star-api.h>
 #include <star/cfg_api_mk2.h>
 #include <star/cfg_api_brick_mk2.h>
 #include <star/cfg_api_brick_mk3.h>
+#include <star/cfg_api_pci_mk2.h>
 #include <star/cfg_api_pci_mk2.h>
 #include <star/cfg_api_pcie_mk2.h>
 #include <star/cfg_api_generic.h>
@@ -70,7 +73,7 @@
 #define STAR_DEVICE_TYPE_BRICK_MKIV	36
 #define STAR_DEVICE_TYPE_PCIE_MKII      38
 
-#define MTU_SIZE 4096 /* was: 1028 */
+#define MTU		16384
 
 /* global fun! */
 int server_socket, server_socket_connection;
@@ -88,6 +91,23 @@ int interpret_pus;
 
 int enable_rmap;
 int enable_gresb;
+
+int interpret_pus;
+int interpret_fee;
+
+#define FEE_DATA_PROTOCOL	0xF0
+
+__extension__
+struct fee_data_hdr {
+	uint8_t logical_addr;
+	uint8_t proto_id;
+	uint16_t data_len;
+	uint16_t fee_pkt_type;
+	uint16_t frame_cntr;	/* increments per-frame, see Draft A.14 MSSL-IF-109 */
+	uint16_t seq_cntr;	/* packet seq. in frame transfer, see Draft A.14 MSSL-IF-110 */
+} __attribute__((packed));
+
+
 
 /* yay (and technically incorrect) */
 volatile fd_set conn_set;
@@ -227,7 +247,7 @@ static int bind_server_socket(const char* url)
 
 	sockfd = socket(AF_INET , SOCK_STREAM , 0);
 
-	FD_ZERO(&conn_set);
+	FD_ZERO((fd_set *)&conn_set);
 
 	if (sockfd < 0) {
 		printf("Socket creation failed: %s\n", strerror(errno));
@@ -276,7 +296,7 @@ static int rmap_bind_server_socket(const char* url)
 
 	sockfd = socket(AF_INET , SOCK_STREAM , 0);
 
-	FD_ZERO(&rmap_conn_set);
+	FD_ZERO((fd_set *)&rmap_conn_set);
 
 	if (sockfd < 0) {
 		printf("Socket creation failed: %s\n", strerror(errno));
@@ -402,6 +422,8 @@ static void net_to_spw(int sockfd)
 	unsigned short packet_length;
 	struct timespec now;
 
+	struct fee_data_hdr fee_hdr;
+
 
 
 	STAR_STREAM_ITEM 	*p_tx_stream_item = NULL;
@@ -441,14 +463,48 @@ static void net_to_spw(int sockfd)
 			goto cleanup;
 		}
 
-		if (interpret_pus) {
-			sctr = (((uint16_t)recv_buffer[2] << 8) | recv_buffer[3]) & 0x3fff;
+		sctr = (((uint16_t)recv_buffer[2] << 8) | recv_buffer[3]) & 0x3fff;
+		if (sctr != expseq)
+			fprintf(stderr, "Sequence expected: %d is: %d\n", expseq, sctr);
 
-			if (sctr != expseq)
-				fprintf(stderr, "Sequence expected: %d is: %d\n", expseq, sctr);
+		expseq = (sctr + 1) & 0x3fff;
 
-			expseq = (sctr + 1) & 0x3fff;
+	} else if (interpret_fee) {
+		recv_bytes = recv(sockfd, &fee_hdr, sizeof(struct fee_data_hdr), MSG_PEEK);
+
+		if (recv_bytes <= 0) {
+			FD_CLR(sockfd, &conn_set);
+			perror("poll_client_socket");
+			goto cleanup;
 		}
+
+		if (fee_hdr.proto_id == FEE_DATA_PROTOCOL) {
+
+			packet_length = __be16_to_cpu(fee_hdr.data_len) + sizeof(struct fee_data_hdr);
+
+			recv_buffer = (uint8_t *) malloc(packet_length);
+
+			recv_bytes  = recv(sockfd, recv_buffer, packet_length, 0);
+
+			if (recv_bytes <= 0) {
+				FD_CLR(sockfd, &conn_set);
+				perror("poll_client_socket");
+				goto cleanup;
+			}
+		}
+
+
+		/* otherwise treat as rmap */
+		recv_buffer = (uint8_t *) malloc(MTU);
+		recv_bytes  = recv(sockfd, recv_buffer, MTU, 0);
+		packet_length = recv_bytes;
+
+		if (recv_bytes <= 0) {
+			FD_CLR(sockfd, &conn_set);
+			perror("poll_client_socket");
+			goto cleanup;
+		}
+
 	} else if (enable_gresb) {
 
 		ssize_t recv_left;
@@ -491,8 +547,8 @@ static void net_to_spw(int sockfd)
 
 	} else {
 
-		recv_buffer = (uint8_t *) malloc(MTU_SIZE);
-		recv_bytes  = recv(sockfd, recv_buffer, MTU_SIZE, 0);
+		recv_buffer = (uint8_t *) malloc(MTU);
+		recv_bytes  = recv(sockfd, recv_buffer, MTU, 0);
 		packet_length = recv_bytes;
 
 		if (recv_bytes <= 0) {
@@ -503,7 +559,6 @@ static void net_to_spw(int sockfd)
 	}
 
 	clock_gettime (CLOCK_MONOTONIC, &now);
-	(void) i;
 #if 0
 	printf("[%ld.%09ld] Server %d got %ld bytes\b", now.tv_sec, now.tv_nsec,
 						        sockfd, recv_bytes);
@@ -516,11 +571,13 @@ static void net_to_spw(int sockfd)
 	/* send packet via SpW*/
 #if 0
 	printf("creating stream item of %d bytes\n", packet_length);
+#endif
 	printf("NET->PC: ");
 	for (i = 0; i < packet_length; i++)
 		printf("%02x", recv_buffer[i]);
-	printf("\n\n");
-#endif
+	printf("\n");
+
+	rmap_parse_pkt(recv_buffer);
 
 	p_tx_stream_item = STAR_createPacket(p_address, recv_buffer,
 					     packet_length, STAR_EOP_TYPE_EOP);
@@ -787,7 +844,7 @@ static void *poll_rmap_socket(__attribute__((unused)) void *arg)
  *  lacks size checks!
  */
 
-static void rmap_net_send(unsigned char *buf)
+static void rmap_net_send(unsigned char *buf, unsigned int len)
 {
 	int fd;
 	unsigned int i;
@@ -798,7 +855,7 @@ static void rmap_net_send(unsigned char *buf)
 	unsigned int n;
 
 
-	pkt = rmap_pkt_from_buffer(&buf[skip_header_bytes]);
+	pkt = rmap_pkt_from_buffer(&buf[skip_header_bytes], len - skip_header_bytes);
 	if (!pkt)
 		return;
 
@@ -907,14 +964,16 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 		p_spw_packet = (STAR_SPACEWIRE_PACKET *) STAR_getTransferItem(p_rx_transfer_op, 0)->item;
 
 		spw_recv_buffer = STAR_getPacketData(p_spw_packet, &spw_recv_bytes);
-
+#if 0
 		/* skip header/address byte(s) */
 		printf("SpW link received %d bytes\n", spw_recv_bytes);
-
+#endif
 		printf("SPW->PC: ");
 		for (i = 0; i < spw_recv_bytes; i++)
 			printf("%02x", spw_recv_buffer[i]);
-		printf("\n\n");
+		printf("\n");
+
+		rmap_parse_pkt(spw_recv_buffer);
 
 		if (spw_recv_bytes <= skip_header_bytes) {
 			printf("skip_header_bytes is %u, dropping packet\n", skip_header_bytes);
@@ -924,7 +983,7 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 
 		if (enable_rmap) {
 			if (spw_recv_buffer[skip_header_bytes + 1] == 0x1) {
-				rmap_net_send(spw_recv_buffer);
+				rmap_net_send(spw_recv_buffer, spw_recv_bytes);
 				continue;
 			}
 		}
@@ -1083,6 +1142,7 @@ int main(int argc, char **argv)
 	unsigned char path[256];
 
 	unsigned short link_speed;
+	U32 link_speed_U32;
 	unsigned short path_len = 0;
 
 	int opt;
@@ -1093,7 +1153,7 @@ int main(int argc, char **argv)
 	unsigned int dev_type;
 	unsigned int link_id;
 	unsigned int link_div;
-	U32 link_speed_U32;
+	unsigned int dev_num = 0;
 
 	struct addrinfo *res;
 
@@ -1121,8 +1181,12 @@ int main(int argc, char **argv)
 	link_div = DEFAULT_LINK_DIV;
 	link_speed = DEFAULT_LINK_SPEED;
 
-	while ((opt = getopt(argc, argv, "c:n:p:s:r:d:t:D:L:S:PRG::h")) != -1) {
+
+	while ((opt = getopt(argc, argv, "i:c:n:p:s:r:d:t:D:L:S:PFRG::h")) != -1) {
 		switch (opt) {
+		case 'i':
+			dev_num = strtol(optarg, NULL, 0);
+			break;
 		case 'c':
 			channel= strtol(optarg, NULL, 0);
 			link_id = channel;
@@ -1199,6 +1263,9 @@ int main(int argc, char **argv)
 		case 'P':
 			interpret_pus = 1;
 			break;
+		case 'F':
+			interpret_fee = 1;
+			break;
 		case 'G':
 			enable_gresb = 1;
 			break;
@@ -1213,6 +1280,7 @@ int main(int argc, char **argv)
 		case 'h':
 		default:
 			printf("\nUsage: %s [OPTIONS]\n", argv[0]);
+			printf("  -i DEVNUM                 SpW device id to use (default %d)\n", dev_num);
 			printf("  -c CHANNEL                SpW channel to use (default %d)\n", channel);
 			printf("  -n 01:1a:cc:..            SpW address nodes route/path in hex bytes (1 byte per node)\n");
 			printf("  -p PORT                   local port number (default %d)\n", port);
@@ -1224,6 +1292,7 @@ int main(int argc, char **argv)
 			printf("  -S LINKSPEED              link speed in MHz (default %d)\n", link_speed);
 			printf("  -L LINKID                 id of link to set speed/divider for; needed with Brick Mk2 port 2; (default link_id = channel). \n");
 			printf("  -P                        parse network byte stream for PUS packets\n");
+			printf("  -F                        parse network byte stream for FEE data packets\n");
 			printf("  -R RMAP_PORT              exchange RMAP via RMAP_PORT\n");
 			printf("  -G                        use GRESB protocol for network exchange\n");
 			printf("  -h, --help                print this help and exit\n");
@@ -1320,7 +1389,7 @@ int main(int argc, char **argv)
 	 * set up SpW device
 	 */
 
-	dev_id = select_device(0);
+	dev_id = select_device(dev_num);
 
 	channel = select_channel(dev_id, channel);
 
@@ -1386,7 +1455,7 @@ int main(int argc, char **argv)
 			break;
 #endif
 		case STAR_DEVICE_TYPE_PCIE_MKII:
-		  
+
 		  /* configure a link speed of 200 */
 		  if (!CFG_PCIE_MK2_setTransmitSignallingRate(dev_id, link_id, link_speed)) {
 				printf("Failed to set link clock frequency for link %d.\n", link_id);
@@ -1394,14 +1463,14 @@ int main(int argc, char **argv)
 		  }
 
 		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, link_speed);
-		  
+
 		  CFG_PCIE_MK2_getTransmitSignallingRate(dev_id, link_id, &link_speed_U32);
-		  
+
 		  printf("PCIe Mk2 port %d link speed configured: %d Mbits/s\n", link_id, link_speed_U32);
 
 		  break;
 
-			
+
 		default:
 			printf("Unknown device with ID %d, don't know how to configure link speed.\n", dev_type);
 			exit(EXIT_FAILURE);
