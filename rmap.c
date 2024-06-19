@@ -187,7 +187,7 @@ struct rmap_pkt *rmap_create_packet(void)
 	struct rmap_pkt *pkt;
 
 
-	pkt = (struct rmap_pkt *) calloc(sizeof(struct rmap_pkt), 1);
+	pkt = (struct rmap_pkt *) calloc(1, sizeof(struct rmap_pkt));
 	if (pkt)
 		pkt->proto_id = RMAP_PROTOCOL_ID;
 

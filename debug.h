@@ -2,7 +2,7 @@
 #define DEBUG_H
 
 #include <stdio.h>
-#define VERBOSE 0
+#define VERBOSE 1
 #if VERBOSE
 #define DBG printf
 #else

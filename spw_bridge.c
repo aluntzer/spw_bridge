@@ -720,10 +720,6 @@ static void rmap_write_cmd(unsigned char dst, uint32_t addr, unsigned char *data
 
 
 
-
-
-
-
 static void rmap_net_to_spw(int sockfd)
 {
 	unsigned char dst;
@@ -956,6 +952,13 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 
 		/* don't block for more than 1 second */
 		rx_status = STAR_waitOnTransferOperationCompletion(p_rx_transfer_op, -1);
+		if (rx_status == STAR_TRANSFER_STATUS_CANCELLED) {
+			printf("TRANSFER CANCELLED!\n");
+			//STAR_destroyPacketData(spw_recv_buffer);
+			//STAR_disposeTransferOperation(p_rx_transfer_op);
+			break;
+		}
+		
 		if (rx_status != STAR_TRANSFER_STATUS_COMPLETE) {
 			printf("TRANSFER INCOMPLETE!\n");
 			continue;
@@ -1029,13 +1032,13 @@ static void *poll_spw(__attribute__((unused)) void *arg)
 			gresb_destroy_host_data_pkt((struct host_to_gresb_pkt *) gresb_pkt);
 	}
 
-	/* never reached...*/
-	if (spw_recv_buffer)
+	/* never reached... unless transfer cancelled on ctrl-c*/
+	/*if (spw_recv_buffer)
 		STAR_destroyPacketData(spw_recv_buffer);
 
 	if (p_rx_transfer_op)
 		STAR_disposeTransferOperation(p_rx_transfer_op);
-
+	 */
 	return NULL;
 }
 
@@ -1161,7 +1164,7 @@ int main(int argc, char **argv)
 
 	PORT_STATUS_CONTROL port_status;
 	STAR_CFG_SPW_LINK_STATUS link_status;
-
+	
 	enum {SERVER, CLIENT} mode;
 
 
@@ -1508,7 +1511,7 @@ int main(int argc, char **argv)
 	}
 
 	/* make sure the link is running */
-        CFG_getPortStatusControl(dev_id, channel, &port_status);
+    CFG_getPortStatusControl(dev_id, channel, &port_status);
 	CFG_getSpaceWireLinkStatus(port_status, &link_status);
 	link_status.start = 1;
 	link_status.running = 1;
@@ -1538,9 +1541,13 @@ int main(int argc, char **argv)
 
 
 	/* XXX */
-	STAR_disposeTransferOperation(pus_rx_transfer_op);
-	STAR_disposeTransferOperation(pus_tx_transfer_op);
+	/* Cancelled transfers are already freed and disposing them again causes a double free */
+	if (STAR_getTransferOperationStatus(pus_rx_transfer_op) != STAR_TRANSFER_STATUS_CANCELLED)
+		STAR_disposeTransferOperation(pus_rx_transfer_op);
 
+	if (STAR_getTransferOperationStatus(pus_rx_transfer_op) != STAR_TRANSFER_STATUS_CANCELLED)
+		STAR_disposeTransferOperation(pus_tx_transfer_op);
+	
 	if (p_address) {
 		STAR_destroyAddress(p_address);
 	}
@@ -1548,7 +1555,5 @@ int main(int argc, char **argv)
 	if (spw_chan_id) {
 		STAR_closeChannel(spw_chan_id);
 	}
-
-
 
 }
